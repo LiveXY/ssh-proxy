@@ -20,8 +20,8 @@ sshproxy state	 查看SSH代理服务器是否启动
 sshproxy add -i ssh1 -h host -P port -u user -p password
 添加SSH代理服务器，-P默认22、-u默认root
 
-sshproxy del -i ssh1	 删除SSH代理服务器ssh1
-sshproxy set -i ssh1 -P port 配置默认使用服务器和绑定端口，默认7070
+sshproxy del -i ssh1		 删除SSH代理服务器ssh1
+sshproxy set -i ssh1 -P port	 配置默认使用服务器和绑定端口，默认7070
 sshproxy clear			 清理使用SSH代理服务器
 
 ```
