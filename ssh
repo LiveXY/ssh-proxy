@@ -1,0 +1,11 @@
+#!/usr/bin/expect
+set timeout 30
+set host [lindex $argv 0]
+set password [lindex $argv 1]
+set port [lindex $argv 2]
+set bport [lindex $argv 3]
+
+spawn ssh -qTfnN -D $bport -p $port $host
+expect "password:"
+send "$password\r"
+expect eof

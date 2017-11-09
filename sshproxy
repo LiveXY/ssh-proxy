@@ -1,0 +1,221 @@
+#!/usr/bin/env node
+
+var program = require('commander');
+var cp = require('child_process');
+var fs = require("fs");
+var readline = require('readline');
+
+var version = require(__dirname + '/package.json').version
+var servers = require(__dirname + '/servers.json');
+var proxyPort = 7070;
+
+program.version(version);
+program.command('start')
+	.description('启动SSH代理服务器')
+	.option('-i, --id <server-id>', '服务器ID')
+	.action(start);
+program.command('stop')
+	.description('停止SSH代理服务器')
+	.action(stop);
+program.command('restart')
+	.description('重启SSH代理服务器')
+	.action(restart);
+program.command('state')
+	.description('SSH代理服务器状态')
+	.action(state);
+program.command('set')
+	.description('设置默认SSH代理服务器')
+	.option('-i, --id <server-id>', '服务器ID')
+	.option('-P, --port <ssh-port>', '代理端口', proxyPort)
+	.action(set);
+program.command('list')
+	.description('SSH代理列表')
+	.action(list);
+program.command('add')
+	.description('添加SSH代理服务器')
+	.option('-i, --id <server-id>', '服务器ID')
+	.option('-h, --host <ssh-host>', '服务器地址')
+	.option('-P, --port <ssh-port>', '服务器端口', 22)
+	.option('-u, --user <ssh-user>', '服务器用户名', 'root')
+	.option('-p, --password <ssh-password>', '服务器密码')
+	.action(add);
+program.command('del')
+	.description('删除SSH代理服务器')
+	.option('-i, --id <server-id>', '服务器ID')
+	.action(del);
+program.command('clear')
+	.description('清理SSH代理服务器')
+	.action(clear);
+program.command('*').action(paramsError);
+program.parse(process.argv);
+if (process.argv.length === 2) paramsError();
+
+function paramsError() {
+	console.error('参数错误！\n\
+sshproxy list/start/stop/restart/state/set/add/del/clear [options]\n\n\
+实例：\n\
+sshproxy list	 查看所有SSH代理服务器信息\n\
+sshproxy start	 启动默认的SSH代理服务器\n\
+sshproxy stop	 停止SSH代理服务器\n\
+sshproxy restart 重启SSH代理服务器\n\
+sshproxy state	 查看SSH代理服务器是否启动\n\n\
+sshproxy add -i ssh1 -h host -P port -u user -p password\n添加SSH代理服务器，-P默认22、-u默认root\n\n\
+sshproxy del -i ssh1		 删除SSH代理服务器ssh1\n\
+sshproxy set -i ssh1 -P port	 配置默认使用服务器和绑定端口，默认7070\n\
+sshproxy clear			 清理使用SSH代理服务器\n\
+');
+		return false;
+}
+function start(opts) {
+	if (!servers._currid_ || !servers._currid_.id || !servers._currid_.port) return error('请配置默认服务器！');
+	if (!servers[servers._currid_.id]) return error('服务器ID不存在！');
+	var server = servers[servers._currid_.id];
+	var sshCMD = __dirname + '/ssh ' + server.user + '@' + server.host + ' ' + server.password + ' ' + server.port + ' ' + servers._currid_.port;
+	return find(servers._currid_.port).then(function(pid) {
+		if (pid) { info('代理服务器已启动！'); return 1; }
+		return exec(sshCMD).then(function(err) {
+			return find(servers._currid_.port).then(function(pid) {
+				if (!pid) error('代理服务器未启动！'); else info('代理服务器已启动！');
+				return 1;
+			});
+		});
+	});
+}
+function find(port) {
+	var findCMD = 'ps aux | grep "ssh -qTfnN -D ' + port + '"';
+	return exec(findCMD).then(function(err){
+		var errs = err.split('\n');
+		for (var i = 0,len = errs.length; i < len; i++) {
+			var e = errs[i];
+			if (!e || e.indexOf('grep ') != -1) continue;
+			var pid = e.match(/ (\d+) /g)[0].trim();
+			return pid;
+		}
+		return null;
+	});
+}
+function stop(opts) {
+	if (!servers._currid_ || !servers._currid_.id || !servers._currid_.port) return error('请配置默认服务器！');
+	if (!servers[servers._currid_.id]) return error('服务器ID不存在！');
+	return find(servers._currid_.port).then(function(pid) {
+		if (!pid) { error('代理服务器未启动！'); return null; }
+		return exec('kill -9 ' + pid).then(function(r) {
+			info('代理服务器已停止！');
+			return 1;
+		});
+	});
+}
+
+function state(opts) {
+	if (!servers._currid_ || !servers._currid_.id || !servers._currid_.port) return error('请配置默认服务器！');
+	if (!servers[servers._currid_.id]) return error('服务器ID不存在！');
+	return find(servers._currid_.port).then(function(pid) {
+		if (!pid) error('代理服务器未启动！'); else info('代理服务器已启动！');
+		return 1;
+	});
+}
+function restart(opts) {
+	return stop().then(start);
+}
+function set(opts) {
+	if (!opts.id) return error('请输入服务器ID！');
+	if (!servers[opts.id]) return error('服务器ID不存在！');
+	servers._currid_ = { id: opts.id, port: opts.port };
+	writeServers(function() {
+		info('设置默认服务器成功：\n' + opts.id + ' ' + JSON.stringify(servers[opts.id]));
+	});
+}
+function list(opts) {
+	var msg = '服务器列表：';
+	for (var id in servers) msg += '\n' + id + ' ' + JSON.stringify(servers[id]);
+	if (msg.length == 6) msg += '\n无';
+	info(msg);
+}
+function add(opts) {
+	if (!opts.id) return error('请输入服务器ID！');
+	if (!opts.host) return error('请输入服务器地址！');
+	if (!opts.password) return error('请输入密码！');
+	if (servers[opts.id]) return error('服务器ID已经存在！');
+	if (!servers._currid_) servers._currid_ = { id: opts.id, port: proxyPort };
+	servers[opts.id] = { host: opts.host, port: opts.port, user: opts.user, password: opts.password };
+	writeServers(function() {
+		info('添加服务器成功：\n' + opts.id + ' ' + JSON.stringify(servers[opts.id]));
+	});
+}
+function del(opts) {
+	if (!opts.id) return error('请输入服务器ID！');
+	if (!servers[opts.id]) return error('服务器ID不存在！');
+	var server = servers[opts.id];
+	var rl = readline.createInterface(process.stdin, process.stdout);
+	rl.setPrompt('确定删除服务器配置吗？y/n > ');
+	rl.prompt();
+	rl.on('line', function(line) {
+		line = line.trim().toLowerCase()
+		if (line === 'y') {
+			delete servers[opts.id];
+			if (servers['_currid_'] == opts.id) delete servers['_currid_'];
+			writeServers(function() {
+				info('删除服务器成功：\n' + opts.id + ' ' + JSON.stringify(server));
+				process.exit(0);
+			});
+		} else process.exit(0);
+	});
+}
+function clear(opts) {
+	var rl = readline.createInterface(process.stdin, process.stdout);
+	rl.setPrompt('确定清理所有服务器配置吗？y/n > ');
+	rl.prompt();
+	rl.on('line', function(line) {
+		line = line.trim().toLowerCase()
+		if (line === 'y') {
+			servers = {};
+			writeServers(function() {
+				info('清理所有服务器成功');
+				process.exit(0);
+			});
+		} else process.exit(0);
+	});
+}
+
+function exec(cmd, option) {
+	return new Promise(function(resolve, reject) {
+		cp.exec(cmd, option, function(err, stdout, stderr) {
+			if (err) error(cmd + ' 执行错误：\n' + err.message);
+			if (stderr) error(cmd + ' 执行失败：\n' + stderr);
+			resolve(err ? '' : stdout);
+		});
+	});
+}
+function now() {
+	var date = new Date();
+	var year = date.getFullYear();
+	var month = date.getMonth()+1;
+	var day = date.getDate();
+	var hour = date.getHours();
+	var minute = date.getMinutes();
+	var second = date.getSeconds();
+	var ss = year + '-';
+	ss += (month < 10 ? ('0' + month) : month) + '-';
+	ss += (day < 10 ? ('0' + day) : day) + ' ';
+	ss += (hour < 10 ? ('0' + hour) : hour) + ':';
+	ss += (minute < 10 ? ('0' + minute) : minute) + ':';
+	ss += second < 10 ? ('0' + second) : second;
+	return ss;
+}
+function write(msg) {
+	msg = msg.replace(/\[\d+m/g, '').replace(//g, '') + '\n';
+	fs.appendFile(__dirname + '/sshproxy.log', msg, 'utf8');
+}
+function info(msg) {
+	msg = now() + ' [INFO] ' + msg;
+	console.log(msg);
+	write(msg);
+}
+function error(msg) {
+	msg = now() + ' [ERROR] ' + msg;
+	console.error(msg);
+	write(msg);
+}
+function writeServers(cb) {
+	fs.writeFile(__dirname + '/servers.json', JSON.stringify(servers), 'utf8', cb);
+}
