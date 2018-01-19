@@ -204,7 +204,7 @@ function now() {
 }
 function write(msg) {
 	msg = msg.replace(/\[\d+m/g, '').replace(//g, '') + '\n';
-	fs.appendFile(__dirname + '/sshproxy.log', msg, 'utf8');
+	fs.appendFileSync(__dirname + '/sshproxy.log', msg, 'utf8');
 }
 function info(msg) {
 	msg = now() + ' [INFO] ' + msg;
